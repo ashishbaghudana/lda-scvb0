@@ -1,15 +1,15 @@
 #include "scvb0.h"
 
 // inference macros
-#define N_theta_d_k(d, k) N_theta_d_k[(d)*num_topics+(k)]
-#define N_phi_w_k(w, k) N_phi_w_k[(w)*num_topics+(k)]
+#define N_theta_d_k(d, k) N_theta_d_k[(d)*num_topics + (k)]
+#define N_phi_w_k(w, k) N_phi_w_k[(w)*num_topics + (k)]
 #define N_z_k(k) N_z_k[(k)]
-#define N_hat_phi_t_w_k(t, w, k) N_hat_phi_t_w_k[(t)][(w)*num_topics+(k)]
+#define N_hat_phi_t_w_k(t, w, k) N_hat_phi_t_w_k[(t)][(w)*num_topics + (k)]
 #define N_hat_z_t_k(t, k) N_hat_z_t_k[(t)][(k)]
 
 // recover hidden variables
-#define theta_d_k(d, k) theta_d_k[(d)*num_topics+(k)]
-#define phi_w_k(w, k) phi_w_k[(w)*num_topics+(k)]
+#define theta_d_k(d, k) theta_d_k[(d)*num_topics + (k)]
+#define phi_w_k(w, k) phi_w_k[(w)*num_topics + (k)]
 
 #ifndef REPORT_PERPLEXITY
 #define REPORT_PERPLEXITY
@@ -38,16 +38,16 @@ long num_topics;
 long num_threads;
 
 // for calculations
-double * N_theta_d_k, * N_phi_w_k, * N_z_k;
-long * C_t;
-double * rho_phi_times_C_over_C_t;
-double * one_over_N_z_k_plus_W_times_ETA;
-double * factor, * one_minus_factor;
-double ** N_hat_phi_t_w_k, ** N_hat_z_t_k;
-double * theta_d_k, * phi_w_k;
+double *N_theta_d_k, *N_phi_w_k, *N_z_k;
+long *C_t;
+double *rho_phi_times_C_over_C_t;
+double *one_over_N_z_k_plus_W_times_ETA;
+double *factor, *one_minus_factor;
+double **N_hat_phi_t_w_k, **N_hat_z_t_k;
+double *theta_d_k, *phi_w_k;
 
 // for output
-struct _word_probability ** topic;
+struct _word_probability **topic;
 
 void calculate_theta_phi();
 void calculate_perplexity();
@@ -55,11 +55,11 @@ void inference(long iteration_idx);
 void calculate_topic();
 void output();
 void print_usage();
-long * allocate_memory_long(long size);
-double * allocate_memory_double(long size);
-double ** allocate_memory_double_2d(long size);
+long *allocate_memory_long(long size);
+double *allocate_memory_double(long size);
+double **allocate_memory_double_2d(long size);
 
-int main(int argc, char ** argv) {
+int main(int argc, char **argv) {
   bool cflag = false, iflag = false, kflag = false, tflag = false;
   int c;
 
@@ -131,45 +131,69 @@ int main(int argc, char ** argv) {
   for (long t = 0; t < num_threads; ++t)
     memset(N_hat_phi_t_w_k[t], 0, (W + 1) * num_topics * sizeof(double));
 
-    for (long d = 1; d <= D; d++) {
-      long thread_id = omp_get_thread_num();
-      printf("Thread ID = %ld\n", thread_id);
-      unsigned long x, y, z, t;
-      // TODO(ashish): random these in final version
-      x = 123456789, y = 362436069, z = 521288629, t = 0;
-      for (long i = 0; i < num_unique_d[d]; i++) {
-        for (long c = 0; c < count_d_i[d][i]; ++c) {
-          x ^= x << 16; x ^= x >> 5; x ^= x << 1;
-          t = x; x = y; y = z; z = t ^ x ^ y;
-          long k = z % num_topics;
-          N_theta_d_k(d, k) += 1;
-          N_hat_phi_t_w_k(thread_id, word_d_i[d][i], k) += 1;
-          N_hat_z_t_k(thread_id, k) += 1;
-        }
+  for (long d = 1; d <= D; d++) {
+    long thread_id = omp_get_thread_num();
+    printf("Thread ID = %ld\n", thread_id);
+    unsigned long x, y, z, t;
+    // TODO(ashish): random these in final version
+    x = 123456789, y = 362436069, z = 521288629, t = 0;
+    for (long i = 0; i < num_unique_d[d]; i++) {
+      for (long c = 0; c < count_d_i[d][i]; ++c) {
+        x ^= x << 16;
+        x ^= x >> 5;
+        x ^= x << 1;
+        t = x;
+        x = y;
+        y = z;
+        z = t ^ x ^ y;
+        long k = z % num_topics;
+        N_theta_d_k(d, k) += 1;
+        N_hat_phi_t_w_k(thread_id, word_d_i[d][i], k) += 1;
+        N_hat_z_t_k(thread_id, k) += 1;
       }
     }
+  }
 
-    for (long k = 0; k < num_topics; k++) {
-      for (long w = 1; w <= W; ++w) {
-        double sum_N_phi = 0;
-          for (long t = 0; t < num_threads; ++t) {
-            sum_N_phi += N_hat_phi_t_w_k(t, w, k);
-          }
-          N_phi_w_k(w, k) = sum_N_phi;
-      }
-      double sum_N_z = 0;
+  for (long k = 0; k < num_topics; k++) {
+    for (long w = 1; w <= W; ++w) {
+      double sum_N_phi = 0;
       for (long t = 0; t < num_threads; ++t) {
-        sum_N_z += N_hat_z_t_k(t, k);
+        sum_N_phi += N_hat_phi_t_w_k(t, w, k);
       }
-      N_z_k(k) = sum_N_z;
+      N_phi_w_k(w, k) = sum_N_phi;
     }
+    double sum_N_z = 0;
+    for (long t = 0; t < num_threads; ++t) {
+      sum_N_z += N_hat_z_t_k(t, k);
+    }
+    N_z_k(k) = sum_N_z;
+  }
 
-    stop_timer("random initialization took %.3f seconds\n");
-    printf("\n");
+  stop_timer("random initialization took %.3f seconds\n");
+  printf("\n");
 
 #ifdef REPORT_PERPLEXITY
-    printf("calculate initial perplexity:\n");
+  printf("calculate initial perplexity:\n");
 
+  start_timer();
+  calculate_theta_phi();
+  stop_timer("theta and phi calculation took %.3f seconds\n");
+
+  start_timer();
+  calculate_perplexity();
+  stop_timer("perplexity calculation took %.3f seconds\n");
+  printf("\n");
+#endif
+
+  // for each iteration
+  for (long iteration_idx = 1; iteration_idx <= iterations; iteration_idx++) {
+    printf("iteration %ld:\n", iteration_idx);
+
+    start_timer();
+    inference(iteration_idx);
+    stop_timer("inference took %.3f seconds\n");
+
+#ifdef REPORT_PERPLEXITY
     start_timer();
     calculate_theta_phi();
     stop_timer("theta and phi calculation took %.3f seconds\n");
@@ -177,305 +201,296 @@ int main(int argc, char ** argv) {
     start_timer();
     calculate_perplexity();
     stop_timer("perplexity calculation took %.3f seconds\n");
+#endif
+
     printf("\n");
-#endif
+  }
 
-    // for each iteration
-    for (long iteration_idx = 1; iteration_idx <= iterations; iteration_idx++) {
-      printf("iteration %ld:\n", iteration_idx);
+  start_timer();
+  calculate_theta_phi();
+  stop_timer("theta and phi calculation took %.3f seconds\n");
 
-      start_timer();
-      inference(iteration_idx);
-      stop_timer("inference took %.3f seconds\n");
+  start_timer();
+  calculate_topic();
+  stop_timer("topic calculation took %.3f seconds\n");
 
-#ifdef REPORT_PERPLEXITY
-      start_timer();
-      calculate_theta_phi();
-      stop_timer("theta and phi calculation took %.3f seconds\n");
+  start_timer();
+  output();
+  stop_timer("writing files took %.3f seconds\n");
 
-      start_timer();
-      calculate_perplexity();
-      stop_timer("perplexity calculation took %.3f seconds\n");
-#endif
-
-      printf("\n");
-    }
-
-    start_timer();
-    calculate_theta_phi();
-    stop_timer("theta and phi calculation took %.3f seconds\n");
-
-    start_timer();
-    calculate_topic();
-    stop_timer("topic calculation took %.3f seconds\n");
-
-    start_timer();
-    output();
-    stop_timer("writing files took %.3f seconds\n");
-
-    return 0;
+  return 0;
 }
 
 void print_usage() {
-  printf("usage: ./lda [-c filename] [-i iterations] [-k num_topics] [-t num_threads]\n");
+  printf(
+      "usage: ./lda [-c filename] [-i iterations] [-k num_topics] [-t "
+      "num_threads]\n");
 }
 
 void calculate_theta_phi() {
-    for (long d = 1; d <= D; d++) {
-        double one_over_N_theta_d_plus_K_times_ALPHA = 0;
-        for (long k = 0; k < num_topics; k++) {
-            one_over_N_theta_d_plus_K_times_ALPHA += N_theta_d_k(d, k);
-        }
-        one_over_N_theta_d_plus_K_times_ALPHA = 1 / (one_over_N_theta_d_plus_K_times_ALPHA + num_topics * ALPHA);
-        for (long k = 0; k < num_topics; k++) {
-            theta_d_k(d, k) = (double)(N_theta_d_k(d, k) + ALPHA) * one_over_N_theta_d_plus_K_times_ALPHA;
-        }
-    }
+  for (long d = 1; d <= D; d++) {
+    double one_over_N_theta_d_plus_K_times_ALPHA = 0;
     for (long k = 0; k < num_topics; k++) {
-        one_over_N_z_k_plus_W_times_ETA[k] = 1 / (N_z_k(k) + W * ETA);
+      one_over_N_theta_d_plus_K_times_ALPHA += N_theta_d_k(d, k);
     }
-    for (long w = 1; w <= W; ++w) {
-        for (long k = 0; k < num_topics; k++) {
-            phi_w_k(w, k) = (double)(N_phi_w_k(w, k) + ETA) * one_over_N_z_k_plus_W_times_ETA[k];
-        }
+    one_over_N_theta_d_plus_K_times_ALPHA =
+        1 / (one_over_N_theta_d_plus_K_times_ALPHA + num_topics * ALPHA);
+    for (long k = 0; k < num_topics; k++) {
+      theta_d_k(d, k) = (double)(N_theta_d_k(d, k) + ALPHA) *
+                        one_over_N_theta_d_plus_K_times_ALPHA;
     }
+  }
+  for (long k = 0; k < num_topics; k++) {
+    one_over_N_z_k_plus_W_times_ETA[k] = 1 / (N_z_k(k) + W * ETA);
+  }
+  for (long w = 1; w <= W; ++w) {
+    for (long k = 0; k < num_topics; k++) {
+      phi_w_k(w, k) =
+          (double)(N_phi_w_k(w, k) + ETA) * one_over_N_z_k_plus_W_times_ETA[k];
+    }
+  }
 }
 
 void calculate_perplexity() {
-    double entropy = 0;
-    #pragma omp parallel for reduction(+:entropy) schedule(static) num_threads(num_threads)
-    for (long d = 1; d <= D; d++) {
-        for (long i = 0; i < num_unique_d[d]; i++) {
-            double P_d_i = 0;
-            for (long k = 0; k < num_topics; k++) {
-                P_d_i += theta_d_k(d, k) * phi_w_k(word_d_i[d][i], k);
-            }
-            entropy += count_d_i[d][i] * log2(P_d_i);
-        }
+  double entropy = 0;
+  for (long d = 1; d <= D; d++) {
+    for (long i = 0; i < num_unique_d[d]; i++) {
+      double P_d_i = 0;
+      for (long k = 0; k < num_topics; k++) {
+        P_d_i += theta_d_k(d, k) * phi_w_k(word_d_i[d][i], k);
+      }
+      entropy += count_d_i[d][i] * log2(P_d_i);
     }
-    entropy = - entropy;
-    printf("(per word) entropy, perplexity: %.2f, %.2f\n", entropy / C, exp2(entropy / C));
+  }
+  entropy = -entropy;
+  printf("(per word) entropy, perplexity: %.2f, %.2f\n", entropy / C,
+         exp2(entropy / C));
 }
 
 void inference(long iteration_idx) {
-    double rho_theta = pow(100 + 10 * iteration_idx, -0.9);
-    double rho_phi = pow(100 + 10 * iteration_idx, -0.9);
-    double one_minus_rho_phi = 1 - rho_phi;
+  double rho_theta = pow(100 + 10 * iteration_idx, -0.9);
+  double rho_phi = pow(100 + 10 * iteration_idx, -0.9);
+  double one_minus_rho_phi = 1 - rho_phi;
 
-    long num_batches = ceil((double)D / BATCH_SIZE);
-    long num_epochs = ceil((double)num_batches / num_threads);
+  long num_batches = ceil((double)D / BATCH_SIZE);
+  long num_epochs = ceil((double)num_batches / num_threads);
 
-    #pragma omp parallel for schedule(static) num_threads(num_threads)
-    for (long c = 1; c <= count_max; ++c) {
-        factor[c] = pow(1 - rho_theta, c);
-        one_minus_factor[c] = 1 - factor[c];
+  for (long c = 1; c <= count_max; ++c) {
+    factor[c] = pow(1 - rho_theta, c);
+    one_minus_factor[c] = 1 - factor[c];
+  }
+
+  for (long epoch_id = 0; epoch_id < num_epochs; ++epoch_id) {
+    long first_batch_this_epoch = epoch_id * num_threads;
+    long first_batch_next_epoch = (epoch_id + 1) * num_threads;
+    if (first_batch_next_epoch > num_batches) {
+      first_batch_next_epoch = num_batches;
+    }
+    long num_batches_this_epoch =
+        first_batch_next_epoch - first_batch_this_epoch;
+
+    for (long k = 0; k < num_topics; k++) {
+      one_over_N_z_k_plus_W_times_ETA[k] = 1 / (N_z_k(k) + W * ETA);
     }
 
-    for (long epoch_id = 0; epoch_id < num_epochs; ++epoch_id) {
-        long first_batch_this_epoch = epoch_id * num_threads;
-        long first_batch_next_epoch = (epoch_id + 1) * num_threads;
-        if (first_batch_next_epoch > num_batches) {
-            first_batch_next_epoch = num_batches;
-        }
-        long num_batches_this_epoch = first_batch_next_epoch - first_batch_this_epoch;
+    memset(C_t, 0, num_batches_this_epoch * sizeof(long));
 
-        #pragma omp parallel for schedule(static) num_threads(num_threads)
-        for (long k = 0; k < num_topics; k++) {
-            one_over_N_z_k_plus_W_times_ETA[k] = 1 / (N_z_k(k) + W * ETA);
-        }
+    // for each batch in epoch
+    {
+      long thread_id = omp_get_thread_num();
+      long batch_id = thread_id + epoch_id * num_threads;
+      long first_doc_this_batch = batch_id * BATCH_SIZE + 1;
+      long first_doc_next_batch = (batch_id + 1) * BATCH_SIZE + 1;
+      if (first_doc_next_batch > D + 1) {
+        first_doc_next_batch = D + 1;
+      }
 
-        memset(C_t, 0, num_batches_this_epoch * sizeof(long));
+      // set N_hat_phi_t_w_k, N_hat_z_t_k to zero
+      memset(N_hat_phi_t_w_k[thread_id], 0,
+             (W + 1) * num_topics * sizeof(double));
 
-        // for each batch in epoch
-        #pragma omp parallel num_threads(num_batches_this_epoch)
-        {
-            long thread_id = omp_get_thread_num();
-            long batch_id = thread_id + epoch_id * num_threads;
-            long first_doc_this_batch = batch_id * BATCH_SIZE + 1;
-            long first_doc_next_batch = (batch_id + 1) * BATCH_SIZE + 1;
-            if (first_doc_next_batch > D + 1) {
-                first_doc_next_batch = D + 1;
+      double *_gamma_k, *_N_theta_k;
+      if ((_gamma_k = (double *)malloc(num_topics * sizeof(double))) == NULL) {
+        printf("Out of memory\n");
+        exit(-1);
+      }
+      if ((_N_theta_k = (double *)malloc(num_topics * sizeof(double))) ==
+          NULL) {
+        printf("Out of memory\n");
+        exit(-1);
+      }
+
+      // for each document d in batch
+      for (long d = first_doc_this_batch; d < first_doc_next_batch; d++) {
+        long _C = C_d[d];
+        long _num_unique = num_unique_d[d];
+        C_t[thread_id] += _C;
+        memcpy(_N_theta_k, &N_theta_d_k(d, 0), num_topics * sizeof(double));
+
+        // for zero or more burn-in passes
+        for (long b = 0; b < NUM_BURN_IN; ++b) {
+          // for each token i
+          for (long i = 0; i < _num_unique; i++) {
+            long _word = word_d_i[d][i];
+            long _count = count_d_i[d][i];
+            // update gamma
+            double normalizer = 0;
+            for (long k = 0; k < num_topics; k++) {
+              _gamma_k[k] = (_N_theta_k[k] + ALPHA) *
+                            (N_phi_w_k(_word, k) + ETA) *
+                            one_over_N_z_k_plus_W_times_ETA[k];
+              normalizer += _gamma_k[k];
             }
-
-            // set N_hat_phi_t_w_k, N_hat_z_t_k to zero
-            memset(N_hat_phi_t_w_k[thread_id], 0, (W + 1) * num_topics * sizeof(double));
-
-            double * _gamma_k, * _N_theta_k;
-            if ((_gamma_k = (double *) malloc(num_topics * sizeof(double))) == NULL) {
-                printf("Out of memory\n");
-                exit(-1);
+            normalizer = 1 / normalizer;
+            // update N_theta_d_k
+            for (long k = 0; k < num_topics; k++) {
+              _N_theta_k[k] =
+                  factor[_count] * _N_theta_k[k] +
+                  one_minus_factor[_count] * _C * _gamma_k[k] * normalizer;
             }
-            if ((_N_theta_k = (double *) malloc(num_topics * sizeof(double))) == NULL) {
-                printf("Out of memory\n");
-                exit(-1);
-            }
-
-            // for each document d in batch
-            for (long d = first_doc_this_batch; d < first_doc_next_batch; d++) {
-                long _C = C_d[d];
-                long _num_unique = num_unique_d[d];
-                C_t[thread_id] += _C;
-                memcpy(_N_theta_k, &N_theta_d_k(d, 0), num_topics * sizeof(double));
-
-                // for zero or more burn-in passes
-                for (long b = 0; b < NUM_BURN_IN; ++b) {
-                    // for each token i
-                    for (long i = 0; i < _num_unique; i++) {
-                        long _word = word_d_i[d][i];
-                        long _count = count_d_i[d][i];
-                        // update gamma
-                        double normalizer = 0;
-                        for (long k = 0; k < num_topics; k++) {
-                            _gamma_k[k] = (_N_theta_k[k] + ALPHA) \
-                                * (N_phi_w_k(_word, k) + ETA) \
-                                * one_over_N_z_k_plus_W_times_ETA[k];
-                            normalizer += _gamma_k[k];
-                        }
-                        normalizer = 1 / normalizer;
-                        // update N_theta_d_k
-                        for (long k = 0; k < num_topics; k++) {
-                            _N_theta_k[k] = factor[_count] * _N_theta_k[k] \
-                                + one_minus_factor[_count] * _C * _gamma_k[k] * normalizer;
-                        }
-                    }
-                }
-
-                // done with burn-in
-                // for each token i
-                for (long i = 0; i < _num_unique; i++) {
-                    long _word = word_d_i[d][i];
-                    long _count = count_d_i[d][i];
-                    // update gamma
-                    double normalizer = 0;
-                    for (long k = 0; k < num_topics; k++) {
-                        _gamma_k[k] = (_N_theta_k[k] + ALPHA) \
-                            * (N_phi_w_k(_word, k) + ETA) \
-                            * one_over_N_z_k_plus_W_times_ETA[k];
-                        normalizer += _gamma_k[k];
-                    }
-                    normalizer = 1 / normalizer;
-                    // update N_theta_d_k, N_hat_phi_t_w_k, N_hat_z_t_k
-                    for (long k = 0; k < num_topics; k++) {
-                        _N_theta_k[k] = factor[_count] * _N_theta_k[k] \
-                            + one_minus_factor[_count] * _C * _gamma_k[k] * normalizer;
-                        double temp = _count * _gamma_k[k] * normalizer;
-                        N_hat_phi_t_w_k(thread_id, _word, k) += temp;
-                        N_hat_z_t_k(thread_id, k) += temp;
-                    }
-                }
-
-                memcpy(&N_theta_d_k(d, 0), _N_theta_k, num_topics * sizeof(double));
-            }
-
-            free(_gamma_k);
-            free(_N_theta_k);
-        } // end omp parallel
-
-        // compute rho_phi * C / C_t[t]
-        for (long t = 0; t < num_batches_this_epoch; ++t) {
-            rho_phi_times_C_over_C_t[t] = rho_phi * C / C_t[t];
+          }
         }
 
-        // update N_phi_w_k
-        #pragma omp parallel for schedule(static) num_threads(num_threads)
-        for (long w = 1; w <= W; ++w) {
-            double * _N_phi_k;
-            if ((_N_phi_k = (double *) malloc(num_topics * sizeof(double))) == NULL) {
-                printf("Out of memory\n");
-                exit(-1);
-            }
-            memcpy(_N_phi_k, &N_phi_w_k(w, 0), num_topics * sizeof(double));
-            for (long t = 0; t < num_batches_this_epoch; ++t) {
-                for (long k = 0; k < num_topics; k++) {
-                    _N_phi_k[k] = rho_phi_times_C_over_C_t[t] * N_hat_phi_t_w_k(t, w, k) \
-                        + one_minus_rho_phi * _N_phi_k[k];
-                }
-            }
-            memcpy(&N_phi_w_k(w, 0), _N_phi_k, num_topics * sizeof(double));
-            free(_N_phi_k);
+        // done with burn-in
+        // for each token i
+        for (long i = 0; i < _num_unique; i++) {
+          long _word = word_d_i[d][i];
+          long _count = count_d_i[d][i];
+          // update gamma
+          double normalizer = 0;
+          for (long k = 0; k < num_topics; k++) {
+            _gamma_k[k] = (_N_theta_k[k] + ALPHA) *
+                          (N_phi_w_k(_word, k) + ETA) *
+                          one_over_N_z_k_plus_W_times_ETA[k];
+            normalizer += _gamma_k[k];
+          }
+          normalizer = 1 / normalizer;
+          // update N_theta_d_k, N_hat_phi_t_w_k, N_hat_z_t_k
+          for (long k = 0; k < num_topics; k++) {
+            _N_theta_k[k] =
+                factor[_count] * _N_theta_k[k] +
+                one_minus_factor[_count] * _C * _gamma_k[k] * normalizer;
+            double temp = _count * _gamma_k[k] * normalizer;
+            N_hat_phi_t_w_k(thread_id, _word, k) += temp;
+            N_hat_z_t_k(thread_id, k) += temp;
+          }
         }
 
-        // update N_z_k
-        #pragma omp parallel for schedule(static) num_threads(num_threads)
-        for (long k = 0; k < num_topics; k++) {
-            double _N_z = N_z_k(k);
-            for (long t = 0; t < num_batches_this_epoch; ++t) {
-                _N_z = rho_phi_times_C_over_C_t[t] * N_hat_z_t_k(t, k) \
-                    + one_minus_rho_phi * _N_z;
-            }
-            N_z_k(k) = _N_z;
-        }
+        memcpy(&N_theta_d_k(d, 0), _N_theta_k, num_topics * sizeof(double));
+      }
+
+      free(_gamma_k);
+      free(_N_theta_k);
+    }  // end omp parallel
+
+    // compute rho_phi * C / C_t[t]
+    for (long t = 0; t < num_batches_this_epoch; ++t) {
+      rho_phi_times_C_over_C_t[t] = rho_phi * C / C_t[t];
     }
+
+// update N_phi_w_k
+#pragma omp parallel for schedule(static) num_threads(num_threads)
+    for (long w = 1; w <= W; ++w) {
+      double *_N_phi_k;
+      if ((_N_phi_k = (double *)malloc(num_topics * sizeof(double))) == NULL) {
+        printf("Out of memory\n");
+        exit(-1);
+      }
+      memcpy(_N_phi_k, &N_phi_w_k(w, 0), num_topics * sizeof(double));
+      for (long t = 0; t < num_batches_this_epoch; ++t) {
+        for (long k = 0; k < num_topics; k++) {
+          _N_phi_k[k] = rho_phi_times_C_over_C_t[t] * N_hat_phi_t_w_k(t, w, k) +
+                        one_minus_rho_phi * _N_phi_k[k];
+        }
+      }
+      memcpy(&N_phi_w_k(w, 0), _N_phi_k, num_topics * sizeof(double));
+      free(_N_phi_k);
+    }
+
+// update N_z_k
+#pragma omp parallel for schedule(static) num_threads(num_threads)
+    for (long k = 0; k < num_topics; k++) {
+      double _N_z = N_z_k(k);
+      for (long t = 0; t < num_batches_this_epoch; ++t) {
+        _N_z = rho_phi_times_C_over_C_t[t] * N_hat_z_t_k(t, k) +
+               one_minus_rho_phi * _N_z;
+      }
+      N_z_k(k) = _N_z;
+    }
+  }
 }
 
 void calculate_topic() {
-    if((topic = (struct _word_probability **) malloc(num_topics * sizeof(struct _word_probability *))) == NULL) {
-        printf("Out of memory\n");
-        exit(-1);
+  if ((topic = (struct _word_probability **)malloc(
+           num_topics * sizeof(struct _word_probability *))) == NULL) {
+    printf("Out of memory\n");
+    exit(-1);
+  }
+  for (long k = 0; k < num_topics; k++) {
+    if ((topic[k] = (struct _word_probability *)malloc(
+             W * sizeof(struct _word_probability))) == NULL) {
+      printf("Out of memory\n");
+      exit(-1);
     }
-    for (long k = 0; k < num_topics; k++) {
-        if((topic[k] = (struct _word_probability *) malloc(W * sizeof(struct _word_probability))) == NULL) {
-            printf("Out of memory\n");
-            exit(-1);
-        }
-        for (long i = 0; i < W; i++) {
-            topic[k][i].word = i + 1;
-            topic[k][i].probability = phi_w_k(i + 1, k);
-        }
+    for (long i = 0; i < W; i++) {
+      topic[k][i].word = i + 1;
+      topic[k][i].probability = phi_w_k(i + 1, k);
     }
+  }
 
-    // sort topic probabilities over words
-    for (long k = 0; k < num_topics; k++) {
-        merge_sort(topic[k], W);
-    }
+  // sort topic probabilities over words
+  for (long k = 0; k < num_topics; k++) {
+    merge_sort(topic[k], W);
+  }
 }
 
 void output() {
-    FILE * output_file;
+  FILE *output_file;
 
-    // topics.txt
-    if ((output_file = fopen("topics.txt", "w")) == NULL) {
-        printf("Can't open topics.txt to write\n");
-        exit(-1);
+  // topics.txt
+  if ((output_file = fopen("topics.txt", "w")) == NULL) {
+    printf("Can't open topics.txt to write\n");
+    exit(-1);
+  }
+  for (long k = 0; k < num_topics; k++) {
+    for (long i = 0; i < NUM_TERMS_REPORTED_PER_TOPIC; i++) {
+      fprintf(output_file, "%ld:%8.6f", topic[k][i].word,
+              topic[k][i].probability);
+      if (i == NUM_TERMS_REPORTED_PER_TOPIC - 1) {
+        fprintf(output_file, "\n");
+      } else {
+        fprintf(output_file, ", ");
+      }
     }
+  }
+  if (0 != fclose(output_file)) {
+    printf("Can't close topics.txt\n");
+    exit(-1);
+  }
+
+  // doctopic.txt
+  if ((output_file = fopen("doctopic.txt", "w")) == NULL) {
+    printf("Can't open doctopic.txt to write\n");
+    exit(-1);
+  }
+  for (long d = 1; d <= D; d++) {
     for (long k = 0; k < num_topics; k++) {
-        for (long i = 0; i < NUM_TERMS_REPORTED_PER_TOPIC; i++) {
-            fprintf(output_file, "%ld:%8.6f", topic[k][i].word, topic[k][i].probability);
-            if (i == NUM_TERMS_REPORTED_PER_TOPIC - 1) {
-                fprintf(output_file, "\n");
-            } else {
-                fprintf(output_file, ", ");
-            }
-        }
+      fprintf(output_file, "%8.6f", theta_d_k(d, k));
+      if (k == num_topics - 1) {
+        fprintf(output_file, "\n");
+      } else {
+        fprintf(output_file, ", ");
+      }
     }
-    if (0 != fclose(output_file)) {
-        printf("Can't close topics.txt\n");
-        exit(-1);
-    }
-
-    // doctopic.txt
-    if ((output_file = fopen("doctopic.txt", "w")) == NULL) {
-        printf("Can't open doctopic.txt to write\n");
-        exit(-1);
-    }
-    for (long d = 1; d <= D; d++) {
-        for (long k = 0; k < num_topics; k++) {
-            fprintf(output_file, "%8.6f", theta_d_k(d, k));
-            if (k == num_topics - 1) {
-                fprintf(output_file, "\n");
-            } else {
-                fprintf(output_file, ", ");
-            }
-        }
-    }
-    if (0 != fclose(output_file)) {
-        printf("Can't close doctopic.txt\n");
-        exit(-1);
-    }
+  }
+  if (0 != fclose(output_file)) {
+    printf("Can't close doctopic.txt\n");
+    exit(-1);
+  }
 }
 
-long * allocate_memory_long(long size) {
-  long * array = (long *) malloc(size * sizeof(long));
+long *allocate_memory_long(long size) {
+  long *array = (long *)malloc(size * sizeof(long));
   if (array == NULL) {
     printf("Out of memory\n");
     exit(-1);
@@ -483,8 +498,8 @@ long * allocate_memory_long(long size) {
   return array;
 }
 
-double * allocate_memory_double(long size) {
-  double * array = (double *) malloc(size * sizeof(double));
+double *allocate_memory_double(long size) {
+  double *array = (double *)malloc(size * sizeof(double));
   if (array == NULL) {
     printf("Out of memory\n");
     exit(-1);
@@ -492,8 +507,8 @@ double * allocate_memory_double(long size) {
   return array;
 }
 
-double** allocate_memory_double_2d(long size) {
-  double ** matrix = (double **) malloc(size * sizeof(double *));
+double **allocate_memory_double_2d(long size) {
+  double **matrix = (double **)malloc(size * sizeof(double *));
   if (matrix == NULL) {
     printf("Out of memory\n");
     exit(-1);
