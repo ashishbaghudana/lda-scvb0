@@ -1,5 +1,6 @@
 CC = gcc
 CFLAGS = -Wall -fopenmp -lm -std=c11
+DEBUG = -DDEBUG
 LDLIBS =
 OBJECTS = dataset.o util.o scvb0.o
 
@@ -16,6 +17,9 @@ util.o: util.c util.h
 
 lda: $(OBJECTS)
 	$(CC) -o lda $(CFLAGS) $(LDLIBS) $(OBJECTS)
+
+debug:
+	$(CC) $(CFLAGS) $(DEBUG) scvb0.c dataset.c util.c -o lda-debug
 
 clean:
 	rm -f *.o *~ lda

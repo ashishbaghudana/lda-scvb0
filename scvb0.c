@@ -53,6 +53,8 @@ void calculate_theta_phi();
 void calculate_perplexity();
 void inference(long iteration_idx);
 void calculate_topic();
+void serial_lda();
+void parallel_lda();
 void output();
 void print_usage();
 long *allocate_memory_long(long size);
@@ -67,22 +69,22 @@ int main(int argc, char **argv) {
 
   while ((c = getopt(argc, argv, ":c:i:k:t")) != -1) {
     switch (c) {
-      case 'c':
-        cflag = true;
-        corpus = optarg;
-        break;
-      case 'i':
-        iflag = true;
-        iterations = atoi(optarg);
-        break;
-      case 'k':
-        kflag = true;
-        num_topics = atoi(optarg);
-        break;
-      case 't':
-        tflag = true;
-        num_threads = atoi(optarg);
-        break;
+    case 'c':
+      cflag = true;
+      corpus = optarg;
+      break;
+    case 'i':
+      iflag = true;
+      iterations = atoi(optarg);
+      break;
+    case 'k':
+      kflag = true;
+      num_topics = atoi(optarg);
+      break;
+    case 't':
+      tflag = true;
+      num_threads = atoi(optarg);
+      break;
     }
   }
 
@@ -100,14 +102,23 @@ int main(int argc, char **argv) {
     num_threads = 1;
   }
 
+  // Initialize pseudo-random number generator
+  srand(time(NULL));
+
   // Read dataset into memory
+#ifdef DEBUG
   start_timer();
+#endif
   read_sparse_dataset(corpus);
+#ifdef DEBUG
   stop_timer("reading file took %.3f seconds\n");
   printf("\n");
+#endif
 
-  // Allocate matrices needed for calculation
+// Allocate matrices needed for calculation
+#ifdef DEBUG
   start_timer();
+#endif
   N_theta_d_k = allocate_memory_double((D + 1) * num_topics);
   N_phi_w_k = allocate_memory_double((W + 1) * num_topics);
   N_z_k = N_phi_w_k;
@@ -123,29 +134,31 @@ int main(int argc, char **argv) {
   N_hat_z_t_k = N_hat_phi_t_w_k;
   theta_d_k = allocate_memory_double((D + 1) * num_topics);
   phi_w_k = allocate_memory_double((W + 1) * num_topics);
+#ifdef DEBUG
   stop_timer("memory allocation took %.3f seconds\n");
+#endif
+
+  serial_lda();
+  return 0;
+}
+
+void serial_lda() {
+  double start_time = omp_get_wtime();
 
   // randomly initialize N_theta_d_k, N_phi_w_k, N_z_k
+#ifdef DEBUG
   start_timer();
+#endif
 
   for (long t = 0; t < num_threads; ++t)
     memset(N_hat_phi_t_w_k[t], 0, (W + 1) * num_topics * sizeof(double));
 
   for (long d = 1; d <= D; d++) {
     long thread_id = omp_get_thread_num();
-    printf("Thread ID = %ld\n", thread_id);
-    unsigned long x, y, z, t;
-    // TODO(ashish): random these in final version
-    x = 123456789, y = 362436069, z = 521288629, t = 0;
+    unsigned long z;
     for (long i = 0; i < num_unique_d[d]; i++) {
       for (long c = 0; c < count_d_i[d][i]; ++c) {
-        x ^= x << 16;
-        x ^= x >> 5;
-        x ^= x << 1;
-        t = x;
-        x = y;
-        y = z;
-        z = t ^ x ^ y;
+        z = rand();
         long k = z % num_topics;
         N_theta_d_k(d, k) += 1;
         N_hat_phi_t_w_k(thread_id, word_d_i[d][i], k) += 1;
@@ -169,19 +182,29 @@ int main(int argc, char **argv) {
     N_z_k(k) = sum_N_z;
   }
 
+#ifdef DEBUG
   stop_timer("random initialization took %.3f seconds\n");
   printf("\n");
+#endif
 
 #ifdef REPORT_PERPLEXITY
-  printf("calculate initial perplexity:\n");
+  printf("\ncalculate initial perplexity:\n");
 
+#ifdef DEBUG
   start_timer();
+#endif
   calculate_theta_phi();
+#ifdef DEBUG
   stop_timer("theta and phi calculation took %.3f seconds\n");
+#endif
 
+#ifdef DEBUG
   start_timer();
+#endif
   calculate_perplexity();
+#ifdef DEBUG
   stop_timer("perplexity calculation took %.3f seconds\n");
+#endif
   printf("\n");
 #endif
 
@@ -189,42 +212,195 @@ int main(int argc, char **argv) {
   for (long iteration_idx = 1; iteration_idx <= iterations; iteration_idx++) {
     printf("iteration %ld:\n", iteration_idx);
 
+#ifdef DEBUG
     start_timer();
+#endif
     inference(iteration_idx);
+#ifdef DEBUG
     stop_timer("inference took %.3f seconds\n");
+#endif
 
 #ifdef REPORT_PERPLEXITY
+#ifdef DEBUG
     start_timer();
+#endif
     calculate_theta_phi();
+#ifdef DEBUG
     stop_timer("theta and phi calculation took %.3f seconds\n");
+#endif
 
+#ifdef DEBUG
     start_timer();
+#endif
     calculate_perplexity();
+#ifdef DEBUG
     stop_timer("perplexity calculation took %.3f seconds\n");
+#endif
 #endif
 
     printf("\n");
   }
 
+#ifdef DEBUG
   start_timer();
+#endif
   calculate_theta_phi();
+#ifdef DEBUG
   stop_timer("theta and phi calculation took %.3f seconds\n");
+#endif
 
+#ifdef DEBUG
   start_timer();
+#endif
   calculate_topic();
+#ifdef DEBUG
   stop_timer("topic calculation took %.3f seconds\n");
+#endif
 
+#ifdef DEBUG
   start_timer();
+#endif
   output();
+#ifdef DEBUG
   stop_timer("writing files took %.3f seconds\n");
+#endif
 
-  return 0;
+  double end_time = omp_get_wtime();
+
+  printf("Time taken: %.3f seconds\n\n", end_time - start_time);
+}
+
+void parallel_lda() {
+  double start_time = omp_get_wtime();
+
+  // randomly initialize N_theta_d_k, N_phi_w_k, N_z_k
+#ifdef DEBUG
+  start_timer();
+#endif
+
+  for (long t = 0; t < num_threads; ++t)
+    memset(N_hat_phi_t_w_k[t], 0, (W + 1) * num_topics * sizeof(double));
+
+  for (long d = 1; d <= D; d++) {
+    long thread_id = omp_get_thread_num();
+    unsigned long z;
+    for (long i = 0; i < num_unique_d[d]; i++) {
+      for (long c = 0; c < count_d_i[d][i]; ++c) {
+        z = rand();
+        long k = z % num_topics;
+        N_theta_d_k(d, k) += 1;
+        N_hat_phi_t_w_k(thread_id, word_d_i[d][i], k) += 1;
+        N_hat_z_t_k(thread_id, k) += 1;
+      }
+    }
+  }
+
+  for (long k = 0; k < num_topics; k++) {
+    for (long w = 1; w <= W; ++w) {
+      double sum_N_phi = 0;
+      for (long t = 0; t < num_threads; ++t) {
+        sum_N_phi += N_hat_phi_t_w_k(t, w, k);
+      }
+      N_phi_w_k(w, k) = sum_N_phi;
+    }
+    double sum_N_z = 0;
+    for (long t = 0; t < num_threads; ++t) {
+      sum_N_z += N_hat_z_t_k(t, k);
+    }
+    N_z_k(k) = sum_N_z;
+  }
+
+#ifdef DEBUG
+  stop_timer("random initialization took %.3f seconds\n");
+  printf("\n");
+#endif
+
+#ifdef REPORT_PERPLEXITY
+  printf("\ncalculate initial perplexity:\n");
+
+#ifdef DEBUG
+  start_timer();
+#endif
+  calculate_theta_phi();
+#ifdef DEBUG
+  stop_timer("theta and phi calculation took %.3f seconds\n");
+#endif
+
+#ifdef DEBUG
+  start_timer();
+#endif
+  calculate_perplexity();
+#ifdef DEBUG
+  stop_timer("perplexity calculation took %.3f seconds\n");
+#endif
+  printf("\n");
+#endif
+
+  // for each iteration
+  for (long iteration_idx = 1; iteration_idx <= iterations; iteration_idx++) {
+    printf("iteration %ld:\n", iteration_idx);
+
+#ifdef DEBUG
+    start_timer();
+#endif
+    inference(iteration_idx);
+#ifdef DEBUG
+    stop_timer("inference took %.3f seconds\n");
+#endif
+
+#ifdef REPORT_PERPLEXITY
+#ifdef DEBUG
+    start_timer();
+#endif
+    calculate_theta_phi();
+#ifdef DEBUG
+    stop_timer("theta and phi calculation took %.3f seconds\n");
+#endif
+
+#ifdef DEBUG
+    start_timer();
+#endif
+    calculate_perplexity();
+#ifdef DEBUG
+    stop_timer("perplexity calculation took %.3f seconds\n");
+#endif
+#endif
+
+    printf("\n");
+  }
+
+#ifdef DEBUG
+  start_timer();
+#endif
+  calculate_theta_phi();
+#ifdef DEBUG
+  stop_timer("theta and phi calculation took %.3f seconds\n");
+#endif
+
+#ifdef DEBUG
+  start_timer();
+#endif
+  calculate_topic();
+#ifdef DEBUG
+  stop_timer("topic calculation took %.3f seconds\n");
+#endif
+
+#ifdef DEBUG
+  start_timer();
+#endif
+  output();
+#ifdef DEBUG
+  stop_timer("writing files took %.3f seconds\n");
+#endif
+
+  double end_time = omp_get_wtime();
+
+  printf("Time taken: %.3f seconds\n\n", end_time - start_time);
 }
 
 void print_usage() {
-  printf(
-      "usage: ./lda [-c filename] [-i iterations] [-k num_topics] [-t "
-      "num_threads]\n");
+  printf("usage: ./lda [-c filename] [-i iterations] [-k num_topics] [-t "
+         "num_threads]\n");
 }
 
 void calculate_theta_phi() {
@@ -381,7 +557,7 @@ void inference(long iteration_idx) {
 
       free(_gamma_k);
       free(_N_theta_k);
-    }  // end omp parallel
+    } // end omp parallel
 
     // compute rho_phi * C / C_t[t]
     for (long t = 0; t < num_batches_this_epoch; ++t) {
