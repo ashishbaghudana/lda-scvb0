@@ -51,12 +51,14 @@ struct _word_probability **topic;
 
 void calculate_theta_phi();
 void calculate_perplexity();
-void inference(long iteration_idx);
+void inference(long iteration_idx, long _num_threads);
 void calculate_topic();
-void serial_lda();
-void parallel_lda();
+double serial_lda();
+double parallel_lda(long _num_threads);
 void output();
 void print_usage();
+void initialize_lda();
+void free_lda();
 long *allocate_memory_long(long size);
 double *allocate_memory_double(long size);
 double **allocate_memory_double_2d(long size);
@@ -67,7 +69,7 @@ int main(int argc, char **argv) {
 
   char *corpus = NULL;
 
-  while ((c = getopt(argc, argv, ":c:i:k:t")) != -1) {
+  while ((c = getopt(argc, argv, ":c:i:k:t:")) != -1) {
     switch (c) {
     case 'c':
       cflag = true;
@@ -102,6 +104,8 @@ int main(int argc, char **argv) {
     num_threads = 1;
   }
 
+  printf("Num threads = %ld\n", num_threads);
+
   // Initialize pseudo-random number generator
   srand(time(NULL));
 
@@ -115,6 +119,16 @@ int main(int argc, char **argv) {
   printf("\n");
 #endif
 
+  // initialize_lda(1);
+  // double serial_time = serial_lda();
+  initialize_lda(num_threads);
+  // double parallel_time = parallel_lda(num_threads);
+  parallel_lda(num_threads);
+  // printf("Speed up = %.3f\n\n", serial_time / parallel_time);
+  return 0;
+}
+
+void initialize_lda(long _num_threads) {
 // Allocate matrices needed for calculation
 #ifdef DEBUG
   start_timer();
@@ -122,13 +136,13 @@ int main(int argc, char **argv) {
   N_theta_d_k = allocate_memory_double((D + 1) * num_topics);
   N_phi_w_k = allocate_memory_double((W + 1) * num_topics);
   N_z_k = N_phi_w_k;
-  C_t = allocate_memory_long(num_threads);
-  rho_phi_times_C_over_C_t = allocate_memory_double(num_threads);
+  C_t = allocate_memory_long(_num_threads);
+  rho_phi_times_C_over_C_t = allocate_memory_double(_num_threads);
   one_over_N_z_k_plus_W_times_ETA = allocate_memory_double(num_topics);
   factor = allocate_memory_double(count_max + 1);
   one_minus_factor = allocate_memory_double(count_max + 1);
-  N_hat_phi_t_w_k = allocate_memory_double_2d(num_threads);
-  for (long t = 0; t < num_threads; t++) {
+  N_hat_phi_t_w_k = allocate_memory_double_2d(_num_threads);
+  for (long t = 0; t < _num_threads; t++) {
     N_hat_phi_t_w_k[t] = allocate_memory_double((W + 1) * num_topics);
   }
   N_hat_z_t_k = N_hat_phi_t_w_k;
@@ -137,12 +151,32 @@ int main(int argc, char **argv) {
 #ifdef DEBUG
   stop_timer("memory allocation took %.3f seconds\n");
 #endif
-
-  serial_lda();
-  return 0;
 }
 
-void serial_lda() {
+void free_lda(long _num_threads) {
+// Allocate matrices needed for calculation
+#ifdef DEBUG
+  start_timer();
+#endif
+  free(N_theta_d_k);
+  free(N_phi_w_k);
+  free(C_t);
+  free(rho_phi_times_C_over_C_t);
+  free(one_over_N_z_k_plus_W_times_ETA);
+  free(factor);
+  free(one_minus_factor);
+  for (long t = 0; t < _num_threads; t++) {
+    free(N_hat_phi_t_w_k[t]);
+  }
+  free(N_hat_phi_t_w_k);
+  free(theta_d_k);
+  free(phi_w_k);
+#ifdef DEBUG
+  stop_timer("memory allocation took %.3f seconds\n");
+#endif
+}
+
+double serial_lda() {
   double start_time = omp_get_wtime();
 
   // randomly initialize N_theta_d_k, N_phi_w_k, N_z_k
@@ -150,19 +184,15 @@ void serial_lda() {
   start_timer();
 #endif
 
-  for (long t = 0; t < num_threads; ++t)
-    memset(N_hat_phi_t_w_k[t], 0, (W + 1) * num_topics * sizeof(double));
-
   for (long d = 1; d <= D; d++) {
-    long thread_id = omp_get_thread_num();
     unsigned long z;
     for (long i = 0; i < num_unique_d[d]; i++) {
       for (long c = 0; c < count_d_i[d][i]; ++c) {
         z = rand();
         long k = z % num_topics;
         N_theta_d_k(d, k) += 1;
-        N_hat_phi_t_w_k(thread_id, word_d_i[d][i], k) += 1;
-        N_hat_z_t_k(thread_id, k) += 1;
+        N_hat_phi_t_w_k(0, word_d_i[d][i], k) += 1;
+        N_hat_z_t_k(0, k) += 1;
       }
     }
   }
@@ -170,15 +200,11 @@ void serial_lda() {
   for (long k = 0; k < num_topics; k++) {
     for (long w = 1; w <= W; ++w) {
       double sum_N_phi = 0;
-      for (long t = 0; t < num_threads; ++t) {
-        sum_N_phi += N_hat_phi_t_w_k(t, w, k);
-      }
+      sum_N_phi += N_hat_phi_t_w_k(0, w, k);
       N_phi_w_k(w, k) = sum_N_phi;
     }
     double sum_N_z = 0;
-    for (long t = 0; t < num_threads; ++t) {
-      sum_N_z += N_hat_z_t_k(t, k);
-    }
+    sum_N_z += N_hat_z_t_k(0, k);
     N_z_k(k) = sum_N_z;
   }
 
@@ -215,7 +241,7 @@ void serial_lda() {
 #ifdef DEBUG
     start_timer();
 #endif
-    inference(iteration_idx);
+    inference(iteration_idx, 1);
 #ifdef DEBUG
     stop_timer("inference took %.3f seconds\n");
 #endif
@@ -268,9 +294,12 @@ void serial_lda() {
   double end_time = omp_get_wtime();
 
   printf("Time taken: %.3f seconds\n\n", end_time - start_time);
+
+  return (end_time - start_time);
 }
 
-void parallel_lda() {
+double parallel_lda(long _num_threads) {
+  printf("Number of threads = %ld\n", _num_threads);
   double start_time = omp_get_wtime();
 
   // randomly initialize N_theta_d_k, N_phi_w_k, N_z_k
@@ -278,9 +307,10 @@ void parallel_lda() {
   start_timer();
 #endif
 
-  for (long t = 0; t < num_threads; ++t)
+  for (long t = 0; t < _num_threads; ++t)
     memset(N_hat_phi_t_w_k[t], 0, (W + 1) * num_topics * sizeof(double));
 
+#pragma omp parallel for num_threads(_num_threads)
   for (long d = 1; d <= D; d++) {
     long thread_id = omp_get_thread_num();
     unsigned long z;
@@ -298,13 +328,13 @@ void parallel_lda() {
   for (long k = 0; k < num_topics; k++) {
     for (long w = 1; w <= W; ++w) {
       double sum_N_phi = 0;
-      for (long t = 0; t < num_threads; ++t) {
+      for (long t = 0; t < _num_threads; ++t) {
         sum_N_phi += N_hat_phi_t_w_k(t, w, k);
       }
       N_phi_w_k(w, k) = sum_N_phi;
     }
     double sum_N_z = 0;
-    for (long t = 0; t < num_threads; ++t) {
+    for (long t = 0; t < _num_threads; ++t) {
       sum_N_z += N_hat_z_t_k(t, k);
     }
     N_z_k(k) = sum_N_z;
@@ -343,7 +373,7 @@ void parallel_lda() {
 #ifdef DEBUG
     start_timer();
 #endif
-    inference(iteration_idx);
+    inference(iteration_idx, _num_threads);
 #ifdef DEBUG
     stop_timer("inference took %.3f seconds\n");
 #endif
@@ -396,6 +426,8 @@ void parallel_lda() {
   double end_time = omp_get_wtime();
 
   printf("Time taken: %.3f seconds\n\n", end_time - start_time);
+
+  return (end_time - start_time);
 }
 
 void print_usage() {
@@ -443,38 +475,41 @@ void calculate_perplexity() {
          exp2(entropy / C));
 }
 
-void inference(long iteration_idx) {
+void inference(long iteration_idx, long _num_threads) {
   double rho_theta = pow(100 + 10 * iteration_idx, -0.9);
   double rho_phi = pow(100 + 10 * iteration_idx, -0.9);
   double one_minus_rho_phi = 1 - rho_phi;
 
   long num_batches = ceil((double)D / BATCH_SIZE);
-  long num_epochs = ceil((double)num_batches / num_threads);
+  long num_epochs = ceil((double)num_batches / _num_threads);
 
+#pragma omp parallel for schedule(dynamic) num_threads(_num_threads)
   for (long c = 1; c <= count_max; ++c) {
     factor[c] = pow(1 - rho_theta, c);
     one_minus_factor[c] = 1 - factor[c];
   }
 
   for (long epoch_id = 0; epoch_id < num_epochs; ++epoch_id) {
-    long first_batch_this_epoch = epoch_id * num_threads;
-    long first_batch_next_epoch = (epoch_id + 1) * num_threads;
+    long first_batch_this_epoch = epoch_id * _num_threads;
+    long first_batch_next_epoch = (epoch_id + 1) * _num_threads;
     if (first_batch_next_epoch > num_batches) {
       first_batch_next_epoch = num_batches;
     }
     long num_batches_this_epoch =
         first_batch_next_epoch - first_batch_this_epoch;
 
+#pragma omp parallel for schedule(dynamic) num_threads(_num_threads)
     for (long k = 0; k < num_topics; k++) {
       one_over_N_z_k_plus_W_times_ETA[k] = 1 / (N_z_k(k) + W * ETA);
     }
 
     memset(C_t, 0, num_batches_this_epoch * sizeof(long));
 
-    // for each batch in epoch
+// for each batch in epoch
+#pragma omp parallel num_threads(_num_threads)
     {
       long thread_id = omp_get_thread_num();
-      long batch_id = thread_id + epoch_id * num_threads;
+      long batch_id = thread_id + epoch_id * _num_threads;
       long first_doc_this_batch = batch_id * BATCH_SIZE + 1;
       long first_doc_next_batch = (batch_id + 1) * BATCH_SIZE + 1;
       if (first_doc_next_batch > D + 1) {
@@ -557,7 +592,7 @@ void inference(long iteration_idx) {
 
       free(_gamma_k);
       free(_N_theta_k);
-    } // end omp parallel
+    }
 
     // compute rho_phi * C / C_t[t]
     for (long t = 0; t < num_batches_this_epoch; ++t) {
@@ -565,7 +600,7 @@ void inference(long iteration_idx) {
     }
 
 // update N_phi_w_k
-#pragma omp parallel for schedule(static) num_threads(num_threads)
+#pragma omp parallel for schedule(dynamic) num_threads(_num_threads)
     for (long w = 1; w <= W; ++w) {
       double *_N_phi_k;
       if ((_N_phi_k = (double *)malloc(num_topics * sizeof(double))) == NULL) {
@@ -584,7 +619,7 @@ void inference(long iteration_idx) {
     }
 
 // update N_z_k
-#pragma omp parallel for schedule(static) num_threads(num_threads)
+#pragma omp parallel for schedule(dynamic) num_threads(_num_threads)
     for (long k = 0; k < num_topics; k++) {
       double _N_z = N_z_k(k);
       for (long t = 0; t < num_batches_this_epoch; ++t) {
