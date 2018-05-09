@@ -24,8 +24,6 @@ The project requires currently requires gcc and OpenMP to be installed on the ma
 $ make clean && make lda
 ```
 
-As the project progresses, we will also make use of the pgcc compiler with the flags -ta=radeon or -ta=nvidia and -Maccel flags to compile for Radeon or Nvidia GPUs. The Makefile will be updated when the project is ready for acceleration.
-
 ## Usage
 The `lda` binary created can be run with the following options.
 
@@ -39,7 +37,5 @@ Supply the following:
 * `[-k num_topics]`: The number of topics in the corpus
 * `[-t num_threads]`: The number of threads to parallelize the inference over
 
-**TODO:** The current implementation does not yet use the `-t` argument.
-
 ## Outcomes of the Project
-At the end of the project, we hope to determine the speedups in a multi-threaded and accelerated implementation and compare it to a the single-threaded version of LDA-SCVB0. We also hope to write a wrapper around the implementation such that it can be invoked using Python.
+We parallelized latent dirichlet allocation using stochastic collapsed variational Bayesian inference using OpenMP. The OpenMP version performs roughly 30x to 80x faster than LDA-C and gets around 3x speedup with 20 cores against a single core implementation.
